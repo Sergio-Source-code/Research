@@ -504,6 +504,36 @@ public:
     double GetMinScaledJacobian(double& avgSJ) const;
 
     bool IsPointInside(const glm::vec3& orig, const glm::vec3 dir = glm::vec3(0, 0, 1)) const;
+
+    std::vector<std::vector<int>> getLocalFaceRegions();
+    double getMinimumScaledJacobian(std::vector<int> faceIds);
+    double getSumOfMinimumScaledJacobian(std::vector<std::vector<int>> regions);
+    double getIterativeEnergyOfRegion(std::vector<int> faceIds);
+    double getMinimumScaledJacobian(Face& f);
+    double getMinimumScaledJacobianAtV(Face& f, Vertex& v);
+    double getMinimumScaledJacobianOfRegion(Vertex& v, double length);
+    void expandFaceRegionByOneLayer(std::vector<int>& localFaceRegion);
+    std::vector<std::vector<int>> mergeRegions(std::vector<std::vector<int>> localFaceRegions);
+    std::vector<int> collapseFacesToVerticies(std::vector<int> fIds);
+    void printQuality();
+    float getAverageArea();
+    float getAreaOfFace(Face& f);
+    void orderNeighboringVertices();
+    void orderVerticesInFaces();
+    Vertex getAverageOfVIds(std::vector<size_t> points);
+    void splitFace(int fId);
+    void expandFace(int fId);
+    void collapseEdge(int eId);
+    std::vector<int> selectBoundaryForIterativeOptimization();
+    std::vector<int> selectBoundaryAsTwoFacesFromCornerVertices();
+    std::vector<int> selectBoundaryAsNFacesFromCornerVertices(int n);
+    std::vector<int> selectBoundaryAsNeighboringFacesFromInversion();
+    std::vector<int> selectBoundrayAsNFacesFromInversion(int n);
+    int getDistanceFromCorner(std::vector<int> vIds, int currentDistance);
+    void classifyCornerVertices();
+    bool isFaceInverted(int fId);
+    void fixInvertedFaces();
+    void getiterativeCornerEnergy();
 private:
     void BuildE();
     void BuildF();

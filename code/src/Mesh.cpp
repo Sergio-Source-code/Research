@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <map>
 #include <iostream>
+#include <queue>
 
 #include <vtkVersion.h>
 #include <vtkSmartPointer.h>
@@ -55,6 +56,9 @@
 //using namespace Eigen;
 
 const size_t MAXID = 0xffffffffffffffff;
+int getIndexOf1(int num, std::vector<unsigned long int> vec);
+std::vector<int> intersectVectors(std::vector<unsigned long int> vec1, std::vector<unsigned long int> vec2);
+int findRelativeOrientation(std::vector<size_t> vec1, std::vector<size_t> vec2);
 
 Mesh::Mesh()
 : m_cellType(HEXAHEDRA)
@@ -2501,7 +2505,17 @@ void Mesh::BuildF_E()
 }
 void Mesh::BuildF_F()
 {
-
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F[i];
+        for (int j = 0; j < f.Vids.size(); j++) {
+            Vertex& v = V[f.Vids[j]];
+            for (int k = 0; k < v.N_Fids.size(); k++) {
+                int f1Id = v.N_Fids.at(k);
+                if (std::find(f.N_Fids.begin(), f.N_Fids.end(), f1Id) == f.N_Fids.end())
+                    f.N_Fids.push_back(f1Id);
+            }
+        }
+    }
 }
 void Mesh::BuildF_C()
 {
@@ -2582,6 +2596,7 @@ void Mesh::BuildAllConnectivities()
 //        BuildE_E();
 //        BuildE_F();
 //    }
+    BuildF_F();
 }
 
 //static void set_cross(const std::vector<size_t> set1, const std::vector<size_t> set2, std::vector<size_t> &result_set)
@@ -3368,4 +3383,1023 @@ bool Mesh::IsPointInside(const glm::vec3& orig, const glm::vec3 dir) const
         }
     }
     return bInside;
+}
+
+double Mesh::getSumOfMinimumScaledJacobian(std::vector<std::vector<int>> regions) {
+    // std::vector<int> d = {245, 420, 456, 274, 388, 445, 455, 469};
+    // return getMinimumScaledJacobian(d);
+    double result = 0;
+    for (int i = 0; i < regions.size(); i++) {
+        std::vector<int> region = regions.at(i);
+        result += getMinimumScaledJacobian(region);
+    }
+    return result;
+}
+
+double Mesh::getIterativeEnergyOfRegion(std::vector<int> faceIds) {
+    double minimumSJ = 1.0;
+    double sumOfInverted = 0.0;
+    double s = 1.0;
+    for (int i = 0; i < faceIds.size(); i++) {
+        Face& f = F.at(faceIds.at(i));
+        double localMinSJ = getMinimumScaledJacobian(f);
+        if (localMinSJ < minimumSJ) {
+            s = minimumSJ;
+            minimumSJ = localMinSJ;
+        }
+        if (localMinSJ < 0)
+            sumOfInverted += localMinSJ;
+        
+        if (localMinSJ > minimumSJ && localMinSJ < s)
+            s = localMinSJ;
+    }
+    // return minimumSJ <= 0 ? sumOfInverted : (minimumSJ + s) / 2;
+    return minimumSJ <= 0 ? sumOfInverted : minimumSJ;
+}
+
+double Mesh::getMinimumScaledJacobian(std::vector<int> faceIds) {
+    double result = 1.0;
+    for (int i = 0; i < faceIds.size(); i++) {
+        Face& f = F.at(faceIds.at(i));
+        double localMinSJ = getMinimumScaledJacobian(f);
+        if (localMinSJ < result)
+            result = localMinSJ;
+    }
+    return result;
+}
+
+double Mesh::getMinimumScaledJacobian(Face& f) {
+    double result = 1.0;
+    for (int j = 0; j < 4; j++) {
+        glm::vec3 v0 = V.at(f.Vids.at(j));
+        glm::vec3 v1 = V.at(f.Vids.at( (j + 1) % 4 ));
+        glm::vec3 v2 = V.at(f.Vids.at( (j + 2) % 4 ));
+        double currentScaledJacobian = glm::cross(glm::normalize(v2 - v1), glm::normalize(v0 - v1)).z;
+        if (currentScaledJacobian < result)
+            result = currentScaledJacobian;
+    }
+    return result;
+}
+
+double Mesh::getMinimumScaledJacobianOfRegion(Vertex& v, double length) {
+    double result = 1.0;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        double lengthToV = glm::length(v - V.at(f.Vids.at(0)));
+        for (int j = 1; j < 4; j++) {
+            double newL = glm::length(v - V.at(f.Vids.at(j)));
+            if (newL < lengthToV)
+                lengthToV = newL;
+        }
+        if (lengthToV > length)
+            continue;
+
+        double minSJOfF = getMinimumScaledJacobian(f);
+        if (minSJOfF < result)
+            result = minSJOfF;
+    }
+    return result;
+}
+
+double Mesh::getMinimumScaledJacobianAtV(Face& f, Vertex& v) {
+    int localIndex = getIndexOf1(v.id, f.Vids);
+    glm::vec3 v0 = V.at(f.Vids.at(localIndex));
+    glm::vec3 v1 = V.at(f.Vids.at( (localIndex + 1) % 4 ));
+    glm::vec3 v2 = V.at(f.Vids.at( (localIndex + 3) % 4 ));
+    return glm::cross(glm::normalize(v1 - v0), glm::normalize(v2 - v0)).z;
+}
+
+void Mesh::printQuality() {
+    double min = 1;
+    double max = -1;
+    double avg = 0;
+    int num = 0;
+    int minIndex = -1;
+    std::vector<int> invertedFIds;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        double jacobian = 1.0;
+        for (int j = 0; j < 4; j++) {
+            glm::vec3 v0 = V.at(f.Vids.at(j));
+            glm::vec3 v1 = V.at(f.Vids.at( (j + 1) % 4 ));
+            glm::vec3 v2 = V.at(f.Vids.at( (j + 2) % 4 ));
+            double newJ = glm::cross(glm::normalize(v2 - v1), glm::normalize(v0 - v1)).z;
+            if (newJ < jacobian)
+                jacobian = newJ;
+        }
+        if (jacobian <= 0) {
+            num++;
+            invertedFIds.push_back(f.id);
+        }
+        if (jacobian < min) {
+            min = jacobian;
+            minIndex = i;
+        }
+        if (jacobian > max) max = jacobian;
+        avg += jacobian;
+    }
+    avg /= F.size();
+    std::cout << "-------------------------" << std::endl;
+    std::cout << "minSJ: " << min << std::endl;
+    std::cout << "avjSJ: " << avg << std::endl;
+    std::cout << "maxSJ: " << max << std::endl;
+    std::cout << "num inverted: " << num << std::endl;
+    std::cout << "minID: " << minIndex << std::endl;
+    for (int i = 0; i < invertedFIds.size(); i++) {
+        std::cout << invertedFIds.at(i) << ", ";
+    }
+    std::cout << std::endl;
+    std::cout << "-------------------------" << std::endl;
+}
+
+void Mesh::orderVerticesInFaces() {
+    std::vector<int> checkLater;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        int numCounterClockwise = 0;
+        for (int j = 0; j < f.Vids.size(); j++) {
+            Vertex& v = V.at(f.Vids.at(j));
+            Vertex& v1 = V.at(f.Vids.at( (j + 1) % f.Vids.size() ));
+            Vertex& v2 = V.at(f.Vids.at( (f.Vids.size() + j - 1) % f.Vids.size() ));
+            const glm::vec3 crossProduct = glm::cross(v1 - v, v2 - v);
+            if (crossProduct.z >= 0)
+                numCounterClockwise++;
+            else
+                numCounterClockwise--;
+        }
+        if (numCounterClockwise == 0) {
+            checkLater.push_back(f.id);
+        } else if (numCounterClockwise < 0) {
+            std::reverse(f.Vids.begin(), f.Vids.end());
+        }
+    }
+    for (int i = 0; i < checkLater.size(); i++) {
+        Face& f = F.at(checkLater.at(i));
+        for (int j = 0; j < f.N_Fids.size(); j++) {
+            Face& f1 = F.at(f.N_Fids.at(j));
+            // f1 cannot be in checkLater, later add more guarantees
+            if (std::find(checkLater.begin(), checkLater.end(), f1.id) != checkLater.end())
+                continue;
+
+            int ordering = findRelativeOrientation(f.Vids, f1.Vids);
+            if (ordering != 0) {
+                if (ordering == 1) {
+                    std::reverse(f.Vids.begin(), f.Vids.end());
+                }
+                break;
+            }
+        }
+    }
+}
+
+void Mesh::orderNeighboringVertices() {
+    std::vector<int> checkOrderOfVertices;
+    for (size_t i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        if (v.isBoundary || v.N_Vids.size() == 0) {
+            continue;
+        }
+        bool done = false;
+        size_t currentFaceId = v.N_Fids.at(0);
+        int secondFaceSelected = -1;
+        std::vector<size_t> polygon;
+        while (!done) {
+            Face& f = F.at(currentFaceId);
+            int neighboringVerticesInPolygon = 0;
+            for (int j = 0; j < f.Vids.size(); j++) {
+                Vertex& v1 = V.at(f.Vids.at(j));
+                if (std::find(v.N_Vids.begin(), v.N_Vids.end(), v1.id) != v.N_Vids.end()) {//if in v.N_Vids
+                    if (std::find(polygon.begin(), polygon.end(), v1.id) == polygon.end()) {//if not in polygon
+                        polygon.push_back(v1.id);
+                        for (int k = 0; k < v1.N_Fids.size(); k++) {//set next currentFaceId
+                            Face& f1 = F.at(v1.N_Fids.at(k));
+                            if (f1.id != currentFaceId && std::find(f1.Vids.begin(), f1.Vids.end(), v.id) != f1.Vids.end()) {
+                                currentFaceId = f1.id;
+                                if (secondFaceSelected == -1)
+                                    secondFaceSelected = f1.id;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    else {//if in polygon
+                        neighboringVerticesInPolygon++;
+                        if (neighboringVerticesInPolygon == 2) {
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (v.N_Vids.size() != polygon.size()) {
+            std::cout << v.N_Vids.size() << " != " << polygon.size() << " for " << v.id << std::endl;
+            std::cout << "ERROR\n";
+        }
+       
+        //checking ordering
+        int numCounterClockwise = 0;
+        for (int j = 0; j < polygon.size() - 1; j++) {
+            Vertex& v1 = V.at(polygon.at(j));
+            Vertex& v2 = V.at(polygon.at(j + 1));
+            const glm::vec3 crossProduct = glm::cross(v1 - v, v2 - v);
+            if (crossProduct.z >= 0)
+                numCounterClockwise++;
+            else
+                numCounterClockwise--;
+        }
+        if (numCounterClockwise == 0) {
+            // check later
+            checkOrderOfVertices.push_back(v.id);
+        }
+        else if (numCounterClockwise < 0) {
+            std::reverse(polygon.begin(), polygon.end());
+        }  
+
+        v.N_Vids.clear();
+        for (int j = 0; j < polygon.size(); j++) {
+            v.N_Vids.push_back(polygon.at(j));
+        }
+    }
+    for (size_t i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        if (!v.isBoundary || v.N_Vids.size() == 0) {
+            continue;
+        }
+
+        //vertices could be in random order
+        //most general solution to order: find boundary edge, traverse through neighboring vertices, selecting one that is boundary with latest selected vertex
+        std::vector<int> polygon;
+        for (int j = 0; j < v.N_Eids.size(); j++) {
+            Edge& e = E.at(v.N_Eids.at(j));
+            if (e.isBoundary) {
+                int v1Id = e.Vids.at(0) != v.id ? e.Vids.at(0) : e.Vids.at(1);
+                polygon.push_back(v1Id);
+                break;
+            }
+        }
+        while (polygon.size() != v.N_Vids.size()) {
+            int previousSize = polygon.size();
+            int previousVId = polygon.at(polygon.size() - 1);
+            for (int j = 0; j < v.N_Vids.size(); j++) {
+                Vertex& v2 = V.at(v.N_Vids.at(j));
+                //if v2Id not in polygon and previousVId is in vertices of neighboring faces, push to polygon and break
+                if (std::find(polygon.begin(), polygon.end(), v2.id) == polygon.end()) {
+                    for (int k = 0; k < v2.N_Fids.size(); k++) {
+                        Face& f = F.at(v2.N_Fids.at(k));
+                        if (std::find(f.Vids.begin(), f.Vids.end(), previousVId) != f.Vids.end()) {
+                            polygon.push_back(v2.id);
+                            break;
+                        }
+                    }
+                }
+                int newSize = polygon.size();
+                if (newSize != previousSize)
+                    break;
+            }
+            int newSize = polygon.size();
+            if (newSize == previousSize) {
+                std::cout << "ERROR: could not order neighboring vertices of boundary vertex " << v.id << std::endl;
+                std::exit(0);
+            }
+        }
+
+        // now that vertices are ordered, how to determine if vertex is corner and if polygon should be reversed
+        // count number of counter-clockwise/clockwise vertices to select ordering. Then use ends of polygon to determine if vertex is corner
+        int numCounterClockwise = 0;
+        for (int j = 0; j < polygon.size() - 1; j++) {
+            Vertex& v1 = V.at(polygon.at(j));
+            Vertex& v2 = V.at(polygon.at(j + 1));
+            const glm::vec3 crossProduct = glm::cross(v1 - v, v2 - v);
+            if (crossProduct.z >= 0)
+                numCounterClockwise++;
+            else
+                numCounterClockwise--;
+        }
+        if (numCounterClockwise == 0) {
+            // check later
+            checkOrderOfVertices.push_back(v.id);
+        }
+        if (numCounterClockwise < 0) {
+            std::reverse(polygon.begin(), polygon.end());
+        }
+        v.N_Vids.clear();
+        for (int j = 0; j < polygon.size(); j++) {
+            v.N_Vids.push_back(polygon.at(j));
+        }
+
+        Vertex& b1 = V.at(polygon.at(0));
+        Vertex& b2 = V.at(polygon.at(polygon.size() - 1));
+        if (glm::cross(b1 - v, b2 - v).z <= -0.3 * glm::length(b1 - v) * glm::length(b2 - v)) //tolerance for straight boundary edges. float * sin of angle is tolerance
+            v.isCorner = true;
+        else
+            v.isCorner = false;
+    }
+
+    while (checkOrderOfVertices.size() != 0) {
+        Vertex& v = V.at(checkOrderOfVertices.back());
+        checkOrderOfVertices.pop_back();
+        bool found = false;
+        for (int j = 0; j < v.N_Fids.size(); j++) {
+            Face& f = F.at(v.N_Fids.at(j));
+            int localId = getIndexOf1(v.id, f.Vids);
+            Vertex& v1 = V.at(f.Vids.at( (localId + 2) % 4 ));
+            // if v1 is not in checkOrderOfVertices
+            if (std::find(checkOrderOfVertices.begin(), checkOrderOfVertices.end(), v1.id) == checkOrderOfVertices.end()) {
+                // returns 1 if ordered consistently, -1 if reversed, 0 if not.
+                // should be reversed
+                int ordering = findRelativeOrientation(v.N_Vids, v1.N_Vids);
+                if (ordering == 0) {
+                    std::cout << "ERROR: ordering == 0\n";
+                    std::exit(0);
+                }
+                if (ordering == 1) {
+                    std::cout << "Reversing N_V for vertex " << v.id << std::endl;
+                    std::reverse(v.N_Vids.begin(), v.N_Vids.end());
+                }
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::cout << "ERROR: checkOrderOfVertices\n";
+            std::exit(0);
+            checkOrderOfVertices.push_back(v.id);
+        }
+    }
+    classifyCornerVertices();
+
+    // std::cout << "CORNER VERTICES\n";
+    // for (int i = 0; i < V.size(); i++) {
+    //     Vertex& v = V.at(i);
+    //     if (v.isCorner)
+    //         std::cout << v.id << ", ";
+    // }
+    // std::cout << std::endl;
+}
+
+void Mesh::classifyCornerVertices() {
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        if (!v.isBoundary)
+            continue;
+        Vertex& b1 = V.at(v.N_Vids.at(0));
+        Vertex& b2 = V.at(v.N_Vids.at(v.N_Vids.size() - 1));
+        if (glm::cross(b1 - v, b2 - v).z <= -0.3 * glm::length(b1 - v) * glm::length(b2 - v)) //tolerance for straight boundary edges. float * sin of angle is tolerance
+            v.isCorner = true;
+        else
+            v.isCorner = false;
+    }
+}
+
+float Mesh::getAverageArea() {
+    float sumOfAreas = 0;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        sumOfAreas += getAreaOfFace(f);
+    }
+    return sumOfAreas / F.size();
+}
+
+float Mesh::getAreaOfFace(Face& f) {
+    float area = 0;
+    for (int i = 0; i < 4; i++) {
+        Vertex& v = V.at(f.Vids.at(i));
+        Vertex& v1 = V.at(f.Vids.at( (i + 1) % 4 ));
+        Vertex& v2 = V.at(f.Vids.at( (i + 3) % 4 ));
+        float cross = glm::length(glm::cross(v1 - v, v2 - v));
+        area += cross / 4;
+    }
+
+    return area;
+}
+
+int getIndexOf1(int num, std::vector<unsigned long int> vec) {
+    for (int i = 0; i < vec.size(); i++) {
+        if (vec.at(i) == num)
+            return i;
+    }
+    return -1;
+}
+
+Vertex Mesh::getAverageOfVIds(std::vector<size_t> points) {
+    Vertex result;
+    for (int i = 0; i < points.size(); i++) {
+        result.x += V.at(points.at(i)).x / points.size();
+        result.y += V.at(points.at(i)).y / points.size();
+    }
+    return result;
+}
+
+void Mesh::splitFace(int fId) {
+    Face& f = F.at(fId);
+    int boundaryVId = -1;
+    int oppositeVId = -1;
+    int localIndex = -1;
+    for (int i = 0; i < f.Vids.size(); i++) {
+        Vertex& v = V.at(f.Vids.at(i));
+        if (v.type == 2 || (f.id == 51 && v.id == 59)) {
+            if (boundaryVId != -1) {
+                std::cout << "ERROR: splitFace called with face containing more than 1 type 2 vertex\n";
+                std::exit(0);
+            }
+            boundaryVId = v.id;
+            localIndex = i;
+            oppositeVId = f.Vids.at((i + 2) % 4);
+        }
+    }
+    if (boundaryVId == -1) {
+        std::cout << "ERROR: splitFace called with face containing no type 2 vertices\n";
+        std::exit(0);
+    }
+
+    Vertex& cornerV = V.at(boundaryVId);
+    Vertex& oppositeV = V.at(oppositeVId);
+
+    Vertex midpointV;
+    midpointV.x = (cornerV.x + oppositeV.x) / 2;
+    midpointV.y = (cornerV.y + oppositeV.y) / 2;
+    midpointV.id = V.size();
+    V.push_back(midpointV);
+
+    //face will have points localIndex, localIndex + 1, opposite, midpoint
+    //new face will have points localIndex, midpoint, opposite, localIndex + 3
+    Cell& c = C.at(fId);
+    c.Vids = { (size_t)boundaryVId, f.Vids.at( (localIndex + 1) % 4 ), oppositeV.id, midpointV.id };
+    Cell newC;
+    newC.id = C.size();
+    newC.Vids = { (size_t)boundaryVId, midpointV.id, oppositeV.id, f.Vids.at( (localIndex + 3) % 4 ) };
+    C.push_back(newC);
+}
+
+void Mesh::expandFace(int fId) {
+    //find average, find midpoints to average, add correct points, add correct cells
+    Face& f = F.at(fId);
+    Vertex average = getAverageOfVIds(f.Vids);
+    size_t baseIndex = V.size();
+    for (int i = 0; i < f.Vids.size(); i++) {
+        Vertex& v = V.at(f.Vids.at(i));
+        Vertex midPoint;
+        midPoint.id = baseIndex + i;
+        midPoint.x = (v.x + average.x) / 2;
+        midPoint.y = (v.y + average.y) / 2;
+        V.push_back(midPoint);
+    }
+    for (int i = 0; i < f.Vids.size(); i++) {
+        Cell newC;
+        newC.id = C.size();
+        newC.Vids = {f.Vids.at(i), f.Vids.at( (i + 1) % 4), baseIndex + ((i + 1) % 4), baseIndex + i};
+        C.push_back(newC);
+    }
+
+    Cell& c = C.at(fId);
+    c.Vids = {baseIndex, baseIndex + 1, baseIndex + 2, baseIndex + 3};
+}
+
+std::vector<int> intersectVectors(std::vector<unsigned long int> vec1, std::vector<unsigned long int> vec2) {
+    std::vector<int> result;
+    for (int i = 0; i < vec1.size(); i++) {
+        for (int j = 0; j < vec2.size(); j++) {
+            if (vec1.at(i) == vec2.at(j)) {
+                result.push_back(vec1.at(i));
+                break;
+            }
+        }
+    }
+    return result;
+}
+
+void Mesh::collapseEdge(int eId) {
+    std::vector<size_t> visitedEdges;
+    std::vector<size_t> visitedFaces;
+    std::map<int, int> vertexMap;
+    std::queue<int> edgeQueue;
+    edgeQueue.push(eId);
+    while (!edgeQueue.empty()) {
+        Edge& e = E.at(edgeQueue.front());
+        visitedEdges.push_back(e.id);
+        edgeQueue.pop();
+        for (int i = 0; i < e.N_Fids.size(); i++) {
+            Face& f = F.at(e.N_Fids.at(i));
+            if (getIndexOf1(f.id, visitedFaces) == -1)
+                visitedFaces.push_back(f.id);
+            for (int j = 0; j < f.Eids.size(); j++) {
+                Edge& newEdge = E.at(f.Eids.at(j));
+                if (intersectVectors(e.Vids, newEdge.Vids).size() == 0) {
+                    if (getIndexOf1(newEdge.id, visitedEdges) == -1) {
+                        edgeQueue.push(newEdge.id);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    std::sort(visitedFaces.begin(), visitedFaces.end());
+    for (int i = visitedFaces.size() - 1; i >= 0; i--) {
+        Face& f = F.at(visitedFaces.at(i));
+        std::cout << "Visited face " << f.id << std::endl;
+        C.erase(C.begin() + f.id);
+    }
+    for (int i = 0; i < visitedEdges.size(); i++) {
+        Edge& e = E.at(visitedEdges.at(i));
+        vertexMap[e.Vids.at(1)] = e.Vids.at(0);
+    }
+    for (int i = 0; i < C.size(); i++) {
+        Cell& c = C.at(i);
+        for (int j = 0; j < c.Vids.size(); j++) {
+            Vertex& v = V.at(c.Vids.at(j));
+            if (vertexMap.find(v.id) != vertexMap.end()) {
+                c.Vids.at(j) = vertexMap[v.id];
+            }
+        }
+    }
+}
+
+std::vector<int> Mesh::selectBoundaryForIterativeOptimization() {
+    return selectBoundaryAsNFacesFromCornerVertices(2);
+}
+
+std::vector<int> Mesh::selectBoundrayAsNFacesFromInversion(int n) {
+    std::vector<int> facesToFree;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        if (isFaceInverted(f.id)) {
+            facesToFree.push_back(f.id);
+        }
+    }
+
+    //expand faces to free by one ring
+    for (int i = 0; i < n - 1; i++) {
+        std::vector<int> newFacesToFree;
+        for (int j = 0; j < F.size(); j++) {
+            Face& f = F.at(j);
+            if (std::find(facesToFree.begin(), facesToFree.end(), f.id) != facesToFree.end())
+                continue;
+            // f is not in facesToFree
+            bool neighborsFreeFace = false;
+            for (int k = 0; k < f.N_Fids.size(); k++) {
+                Face& f1 = F.at(f.N_Fids.at(k));
+
+                //make sure f and f1 share an edge
+                bool shareEdge = false;
+                for (int m = 0; m < f.Eids.size(); m++) {
+                    for (int n = 0; n < f1.Eids.size(); n++) {
+                        if (f.Eids.at(m) == f1.Eids.at(n)) {
+                            shareEdge = true;
+                            break;
+                        }
+                    }
+                    if (shareEdge)
+                        break;
+                }
+                if (!shareEdge)
+                    continue;
+
+                if (std::find(facesToFree.begin(), facesToFree.end(), f1.id) != facesToFree.end()) {
+                    // f1 is in facesToFree
+                    neighborsFreeFace = true;
+                    break;
+                }
+            }
+            if (neighborsFreeFace)
+                newFacesToFree.push_back(f.id);
+        }
+        for (int j = 0; j < newFacesToFree.size(); j++) {
+            facesToFree.push_back(newFacesToFree.at(j));
+        }
+    }
+
+    std::vector<int> verticesToFree;
+    for (int i = 0; i < facesToFree.size(); i++) {
+        Face& f = F.at(facesToFree.at(i));
+        for (int j = 0; j < f.Vids.size(); j++) {
+            Vertex& v = V.at(f.Vids.at(j));
+            if (v.isBoundary)
+                continue;
+            if (std::find(verticesToFree.begin(), verticesToFree.end(), v.id) == verticesToFree.end()) {
+                verticesToFree.push_back(v.id);
+            }
+        }
+    }
+
+    // reset boundary/free vertices
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        v.isBoundary = true;
+    }
+    // std::cout << "Freeing vertices: " << std::endl;
+    for (int i = 0; i < verticesToFree.size(); i++) {
+        Vertex& v = V.at(verticesToFree.at(i));
+        // std::cout << v.id << ", ";
+        v.isBoundary = false;
+    }
+    // std::cout << std::endl;
+    return verticesToFree;
+}
+
+std::vector<int> Mesh::selectBoundaryAsNeighboringFacesFromInversion() {
+    std::vector<int> verticesToFree;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        if (isFaceInverted(f.id)) {
+            for (int j = 0; j < f.Vids.size(); j++) {
+                Vertex& v = V.at(f.Vids.at(j));
+                if (v.isBoundary)
+                    continue;
+                if (std::find(verticesToFree.begin(), verticesToFree.end(), v.id) == verticesToFree.end()) {
+                    verticesToFree.push_back(v.id);
+                }
+            }
+        }
+    }
+
+    // reset boundary/free vertices
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        v.isBoundary = true;
+    }
+    // std::cout << "Freeing vertices: " << std::endl;
+    for (int i = 0; i < verticesToFree.size(); i++) {
+        Vertex& v = V.at(verticesToFree.at(i));
+        // std::cout << v.id << ", ";
+        v.isBoundary = false;
+    }
+    // std::cout << std::endl;
+    return verticesToFree;
+}
+
+bool Mesh::isFaceInverted(int fId) {
+    Face& f = F.at(fId);
+    for (int i = 0; i < f.Vids.size(); i++) {
+        Vertex& v = V.at(f.Vids.at(i));
+        Vertex& v1 = V.at(f.Vids.at( (i + 1) % f.Vids.size() ));
+        Vertex& v2 = V.at(f.Vids.at( (f.Vids.size() + i - 1) % f.Vids.size() ));
+        if (glm::cross(v1 - v, v2 - v).z <= 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<int> Mesh::selectBoundaryAsTwoFacesFromCornerVertices() {
+    return selectBoundaryAsNFacesFromCornerVertices(2);
+}
+
+std::vector<std::vector<int>> Mesh::getLocalFaceRegions() {
+    std::vector<std::vector<int>> result;
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        if (!v.isCorner)
+            continue;
+        std::vector<int> localFaceRegion;
+        for (int j = 0; j < v.N_Fids.size(); j++) {
+            localFaceRegion.push_back(v.N_Fids.at(j));
+        }
+
+        for (int j = 0; j < 1; j++) {
+            expandFaceRegionByOneLayer(localFaceRegion);
+        }
+
+        double minSJOfRegion = getMinimumScaledJacobian(localFaceRegion);
+        if (minSJOfRegion <= 0)
+            result.push_back(localFaceRegion);
+    }
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        if (getMinimumScaledJacobian(f) > 0)
+            continue;
+        std::vector<int> localFaceRegion;
+        localFaceRegion.push_back(f.id);
+        expandFaceRegionByOneLayer(localFaceRegion);
+        // expandFaceRegionByOneLayer(localFaceRegion);
+        result.push_back(localFaceRegion);
+    }
+
+    result = mergeRegions(result);
+
+    //remove unsolvable faces
+    for (int i = result.size() - 1; i >= 0; i--) {
+        std::vector<int>& localRegion = result.at(i);
+        for (int j = localRegion.size() - 1; j >= 0; j--) {
+            Face& f = F.at(localRegion.at(j));
+            double faceArea = getAreaOfFace(f);
+            if (std::abs(faceArea) <= 0.00001) {
+                localRegion.erase(localRegion.begin() + j);
+            }
+        }
+        if (localRegion.size() == 0)
+            result.erase(result.begin() + i);
+    }
+    return result;
+}
+
+// 5, 16, 140, 170, 227, 232, 278, 440, 14, 194, 242, 261, 276, 290, 294, 419, 474, 178, 194, 276, 290, 294, 88, 158, 211, 214, 473, 20, 81, 88, 152, 158, 211, 248, 473,
+// 19, 161, 184, 305, 353, 13, 143, 154, 393, 395, 17, 154, 391,
+// 12, 36, 82, 235, 329, 342, 351, 358, 386, 84, 174, 231, 296, 432, 475, 14, 112, 190, 233, 242, 282, 434, 112, 190, 221, 434,
+// 80, 98, 148, 182, 200, 293, 347, 455, 245, 274, 388, 420, 445, 456, 469,
+// 159, 172, 186, 195, 266, 421
+
+std::vector<std::vector<int>> Mesh::mergeRegions(std::vector<std::vector<int>> localFaceRegions) {
+    for (int i = 0; i < localFaceRegions.size(); i++) {
+        std::vector<int>& localFaceRegion = localFaceRegions.at(i);
+        std::sort(localFaceRegion.begin(), localFaceRegion.end());
+    }
+    std::vector<std::vector<int>> result;
+    for (int i = 0; i < localFaceRegions.size(); i++) {
+        std::vector<int>& currentFaceRegion = localFaceRegions.at(i);
+        while (true) {
+            bool merged = false;
+            for (int j = localFaceRegions.size() - 1; j > i; j--) {
+                std::vector<int> verticiesInCurrent = collapseFacesToVerticies(currentFaceRegion);
+                std::vector<int> otherFaceRegion = localFaceRegions.at(j);
+                std::vector<int> verticiesInOther = collapseFacesToVerticies(otherFaceRegion);
+                std::vector<int> vertexIntersection;
+                std::set_intersection(verticiesInCurrent.begin(), verticiesInCurrent.end(), verticiesInOther.begin(), verticiesInOther.end(), std::back_inserter(vertexIntersection));
+                if (vertexIntersection.size() != 0) {
+                    merged = true;
+                    // verticies overlap, add elements of otherFaceRegion not in currentFaceRegion to currentFaceRegion
+                    std::vector<int> faceDifference;
+                    std::set_difference(otherFaceRegion.begin(), otherFaceRegion.end(), currentFaceRegion.begin(), currentFaceRegion.end(), std::back_inserter(faceDifference));
+                    for (int k = 0; k < faceDifference.size(); k++) {
+                        currentFaceRegion.push_back(faceDifference.at(k));
+                    }
+                    localFaceRegions.erase(localFaceRegions.begin() + j);
+                }
+            }
+            if (!merged)
+                break;
+        }
+        result.push_back(currentFaceRegion);
+    }
+    return result;
+}
+
+std::vector<int> Mesh::collapseFacesToVerticies(std::vector<int> fIds) {
+    std::vector<int> vIds;
+    for (int i = 0; i < fIds.size(); i++) {
+        Face& f = F.at(fIds.at(i));
+        for (int j = 0; j < f.Vids.size(); j++) {
+            vIds.push_back(f.Vids.at(j));
+        }
+    }
+    
+    std::sort(vIds.begin(), vIds.end());
+    auto last = std::unique(vIds.begin(), vIds.end());
+    vIds.erase(last, vIds.end());
+    return vIds;
+}
+
+void Mesh::expandFaceRegionByOneLayer(std::vector<int>& localFaceRegion) {
+    std::vector<int> newFacesToAdd;
+    for (int k = 0; k < F.size(); k++) {
+        Face& f = F.at(k);
+        if (std::find(localFaceRegion.begin(), localFaceRegion.end(), f.id) != localFaceRegion.end())
+            continue;
+        // f is not in localFaceRegion
+        bool neighborsFaceRegion = false;
+        for (int l = 0; l < f.N_Fids.size(); l++) {
+            Face& f1 = F.at(f.N_Fids.at(l));
+
+            //make sure f and f1 share an edge
+            bool shareEdge = false;
+            for (int m = 0; m < f.Eids.size(); m++) {
+                for (int n = 0; n < f1.Eids.size(); n++) {
+                    if (f.Eids.at(m) == f1.Eids.at(n)) {
+                        shareEdge = true;
+                        break;
+                    }
+                }
+            }
+            if (!shareEdge)
+                continue;
+
+            if (std::find(localFaceRegion.begin(), localFaceRegion.end(), f1.id) != localFaceRegion.end()) {
+                // f1 is in localFaceRegion
+                neighborsFaceRegion = true;
+                break;
+            }
+        }
+        if (neighborsFaceRegion)
+            newFacesToAdd.push_back(f.id);
+    }
+    for (int j = 0; j < newFacesToAdd.size(); j++) {
+        localFaceRegion.push_back(newFacesToAdd.at(j));
+    }
+}
+
+std::vector<int> Mesh::selectBoundaryAsNFacesFromCornerVertices(int n) {
+    std::vector<int> facesToFree;
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        if (!v.isBoundary)
+            continue;
+        int v1Id = -1;
+        int v2Id = -1;
+        for (int j = 0; j < v.N_Vids.size(); j++) {
+            Vertex& v1 = V.at(v.N_Vids.at(j));
+            if (!v1.isBoundary)
+                continue;
+            if (v1Id == -1)
+                v1Id = v1.id;
+            else if (v2Id == -1)
+                v2Id = v1.id;
+            else {
+                v1Id = -1;
+                v2Id = -1;
+                break;
+            }
+        }
+        if (v1Id == -1 || v2Id == -1)
+            continue;
+        // for each boundary vertex with two neighboring boundary vertices
+        Vertex& boundaryV1 = V.at(v1Id);
+        Vertex& boundaryV2 = V.at(v2Id);
+        if (v.isCorner) {
+            for (int j = 0; j < v.N_Fids.size(); j++) {
+                facesToFree.push_back(v.N_Fids.at(j));
+            }
+        }
+    }
+
+    //expand faces to free by one ring
+    for (int i = 0; i < n - 1; i++) {
+        std::vector<int> newFacesToFree;
+        for (int j = 0; j < F.size(); j++) {
+            Face& f = F.at(j);
+            if (std::find(facesToFree.begin(), facesToFree.end(), f.id) != facesToFree.end())
+                continue;
+            // f is not in facesToFree
+            bool neighborsFreeFace = false;
+            for (int k = 0; k < f.N_Fids.size(); k++) {
+                Face& f1 = F.at(f.N_Fids.at(k));
+
+                //make sure f and f1 share an edge
+                bool shareEdge = false;
+                for (int m = 0; m < f.Eids.size(); m++) {
+                    for (int n = 0; n < f1.Eids.size(); n++) {
+                        if (f.Eids.at(m) == f1.Eids.at(n)) {
+                            shareEdge = true;
+                            break;
+                        }
+                    }
+                    if (shareEdge)
+                        break;
+                }
+                if (!shareEdge)
+                    continue;
+
+                if (std::find(facesToFree.begin(), facesToFree.end(), f1.id) != facesToFree.end()) {
+                    // f1 is in facesToFree
+                    neighborsFreeFace = true;
+                    break;
+                }
+            }
+            if (neighborsFreeFace)
+                newFacesToFree.push_back(f.id);
+        }
+        for (int j = 0; j < newFacesToFree.size(); j++) {
+            facesToFree.push_back(newFacesToFree.at(j));
+        }
+    }
+
+    // select all inner vertices of facesToFree as free vertices
+    std::vector<int> verticesToFree;
+    std::vector<int> verticesToIgnoreDELETE = {496, 488, 487, 505, 507, 480, 481, 467, 468};
+    for (int i = 0; i < facesToFree.size(); i++) {
+        Face& f = F.at(facesToFree.at(i));
+        for (int j = 0; j < f.Vids.size(); j++) {
+            Vertex& v = V.at(f.Vids.at(j));
+            if (v.isBoundary)
+                continue;
+            if (std::find(verticesToFree.begin(), verticesToFree.end(), v.id) == verticesToFree.end()) {
+                if (std::find(verticesToIgnoreDELETE.begin(), verticesToIgnoreDELETE.end(), v.id) == verticesToIgnoreDELETE.end())
+                    verticesToFree.push_back(v.id);
+            }
+        }
+    }
+
+    // reset boundary/free vertices
+    for (int i = 0; i < V.size(); i++) {
+        Vertex& v = V.at(i);
+        v.isBoundary = true;
+    }
+    std::cout << "Freeing vertices: " << std::endl;
+    for (int i = 0; i < verticesToFree.size(); i++) {
+        Vertex& v = V.at(verticesToFree.at(i));
+        std::cout << v.id << ", ";
+        v.isBoundary = false;
+    }
+    std::cout << std::endl;
+    return verticesToFree;
+}
+
+int Mesh::getDistanceFromCorner(std::vector<int> vIds, int currentDistance) {
+    std::vector<int> newVerticesToAdd;
+    for (int i = 0; i < vIds.size(); i++) {
+        Vertex& v = V.at(vIds.at(i));
+        for (int j = 0; j < v.N_Vids.size(); j++) {
+            Vertex& nV = V.at(v.N_Vids.at(j));
+            newVerticesToAdd.push_back(nV.id); // inefficiency is okay for now
+            if (nV.isCorner) {
+                return currentDistance + 1;
+            }
+        }
+    }
+
+    for (int i = 0; i < newVerticesToAdd.size(); i++) {
+        vIds.push_back(newVerticesToAdd.at(i));
+    }
+    return getDistanceFromCorner(vIds, currentDistance + 1);
+}
+
+int findRelativeOrientation(std::vector<size_t> vec1, std::vector<size_t> vec2) {
+    // first find matching element
+    int index1 = -1;
+    int index2 = -1;
+    for (int i = 0; i < vec1.size(); i++) {
+        int num1 = vec1.at(i);
+        for (int j = 0; j < vec2.size(); j++) {
+            int num2 = vec2.at(j);
+            if (num1 == num2) {
+                index1 = i;
+                index2 = j;
+                break;
+            }
+        }
+        if (index1 != -1) {
+            break;
+        }
+    }
+    int vec1Prev = vec1.at( (vec1.size() + index1 - 1) % vec1.size() );
+    int vec1After = vec1.at( (index1 + 1) % vec1.size() );
+    int vec2Prev = vec2.at( (vec2.size() + index2 - 1) % vec2.size() );
+    int vec2After = vec2.at( (index2 + 1) % vec2.size() );
+    if (vec1Prev == vec2Prev || vec1After == vec2After) {
+        return 1;
+    } else if (vec1Prev == vec2After || vec1After == vec2Prev) {
+        return -1;
+    }
+    return 0;
+}
+
+void Mesh::fixInvertedFaces() {
+    std::cout << "-----------------\n";
+    std::cout << "in fixInvertedFaces()\n";
+    // find list of critical vertices
+    std::vector<int> criticalVertexIds;
+    for (int i = 0; i < F.size(); i++) {
+        Face& f = F.at(i);
+        int cornerVId = -1;
+        int secondBoundaryVId = -1;
+        int numOfBoundaryVertices = 0;
+        for (int j = 0; j < f.Vids.size(); j++) {
+            Vertex& v = V.at(f.Vids.at(j));
+            if (v.isBoundary) {
+                numOfBoundaryVertices++;
+                if (v.isCorner) {
+                    cornerVId = v.id;
+                }
+                else {
+                    secondBoundaryVId = v.id;
+                }
+            }
+        }
+        if (cornerVId == -1)
+            continue;
+        
+        if (numOfBoundaryVertices == 2 && cornerVId != -1 && secondBoundaryVId != -1) {
+            // for half pull, one vertex past straight edge
+            Vertex& v = V.at(cornerVId);
+            Vertex& v1 = V.at(secondBoundaryVId);
+            int v2Id = f.Vids.at((getIndexOf1(v1.id, f.Vids) + 2) % 4);
+            Vertex& v2 = V.at(v2Id);
+
+            std::vector<size_t> vertices = {v2.id, v.id, v1.id};
+            bool isOrientedCounterClockwise = (findRelativeOrientation(f.Vids, vertices) == 1);
+            if ((glm::cross(v1 - v, v2 - v).z <= 0) == isOrientedCounterClockwise) {
+                std::cout << v2.id << ", ";
+                // find new optimal position:
+                float length = glm::length(v2 - v);
+                glm::vec3 delta = (v - v1) * length / glm::length(v - v1);
+                glm::vec3 optimalV;
+                float angle = 10.0 * (3.14159265 / 180);
+                if (isOrientedCounterClockwise)
+                    angle *= -1;
+                optimalV.x = v.x + std::cos(angle) * delta.x - std::sin(angle) * delta.y;
+                optimalV.y = v.y + std::sin(angle) * delta.x + std::cos(angle) * delta.y;
+                v2.x = optimalV.x;
+                v2.y = optimalV.y;
+                v2.isBoundary = true;
+            }
+        }
+        if (numOfBoundaryVertices == 1) {
+            // for full pull, angle at corner is inverted
+        }
+    }
+    std::cout << "\nout of fixInvertedFaces()\n";
+    std::cout << "-----------------\n";
+}
+
+void Mesh::getiterativeCornerEnergy() {
 }
