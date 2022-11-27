@@ -441,130 +441,54 @@ public:
     glm::vec3 dir;
 };
 
-class Mesh
-{
+
+class Mesh {
 public:
-    Mesh();
+    Mesh();// : m_cellType(QUAD) {};
     Mesh(const Mesh& r);
     Mesh(const std::vector<Vertex>& V, const std::vector<Cell>& C, ElementType m_cellType);
     Mesh(const std::vector<Vertex>& V, const std::vector<Face>& F, ElementType m_cellType = QUAD);
     Mesh(const Mesh& r, const std::vector<size_t>& cellIds);
     virtual ~Mesh();
+    void process();
 
-public:
-    void BuildAllConnectivities(); // Get Neighboring Info, including, E, F, C, V_V, V_E, V_F, V_C, E_V, E_F, E_C, F_V, F_E, F_F, F_C, C_V, C_E, C_F, C_C
-    void ExtractBoundary();
-    size_t ExtractLayers();
-    void ExtractSingularities();
-    void ExtractTwoRingNeighborSurfaceFaceIdsForEachVertex(int N = 2);
-    void BuildParallelE();
-    void BuildConsecutiveE();
-    void BuildOrthogonalE();
-    void GetNormalOfSurfaceFaces();             // must ExtractBoundary(); first
-    void GetNormalOfSurfaceVertices();          // must ExtractBoundary(); first
-    void RemoveUselessVertices();
-    void ClassifyVertexTypes();
-    void LabelSurface();
-    void ClearLabelOfSurface();
-    void LabelSharpEdges(const bool breakAtConrer = false);
-    void SetCosAngleThreshold(const double cos_angle = 0.91);
-    //bool IsPointInTriangle(const glm::vec3& P, const glm::vec3& A, const glm::vec3& B, const glm::vec3& C) const;
-    bool IsPointInTriangle(const Vertex& p, const Vertex& p0, const Vertex& p1, const Vertex& p2) const;
-    bool IsPointInTriangle(const glm::vec3& p, const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2) const;
-    bool IsPointInFace(const glm::vec3& P, const Face& face) const;
-    glm::vec3 GetProjectLocation(const glm::vec3& p) const;
-    glm::vec3 GetProjectLocation(const Vertex& p) const;
-    glm::vec3 GetProjectLocationFast(const Vertex& p) const;
-    glm::vec3 GetProjectLocationOnRefSurface(const glm::vec3& p, const Vertex& refV) const;
-    glm::vec3 GetProjectLocationOnTargetSurface(const glm::vec3& p, const Vertex& refV, const Mesh& targetSurfaceMesh) const;
-    void ProjectTo(const Mesh& mesh);
-    void FastProjectTo(const Mesh& mesh);
-    void ProjectToRefMesh(const Mesh& refMesh);
-    void ProjectToTargetSurface(const Mesh& refMesh, const Mesh& targetSurfaceMesh);
-
-    double GetAvgEdgeLength();
-    double SmoothVolume(const SmoothMethod smoothMethod = LAPLACE_EDGE);
-    double SmoothSurface(size_t iters = 1, const SmoothMethod smoothMethod = LAPLACE_EDGE,
-            const bool preserveSharpFeature = false, const bool treatSharpFeatureAsRegular = false, const bool treatCornerAsRegular = false);
-    double SmoothAndProjectSurface(const Mesh& mesh, size_t iters = 1, const SmoothMethod smoothMethod = LAPLACE_EDGE,
-            const bool preserveSharpFeature = false, const bool treatSharpFeatureAsRegular = false, const bool treatCornerAsRegular = false,
-            const bool preserveQuality = false);
-    double ProjectSurface(const Mesh& mesh, size_t iters = 1, const SmoothMethod smoothMethod = LAPLACE_EDGE,
-            const bool preserveSharpFeature = false, const bool treatSharpFeatureAsRegular = false, const bool treatCornerAsRegular = false,
-            const bool preserveQuality = false);
-    double SmoothVolume(const Mesh& mesh, size_t iters = 1, const SmoothMethod smoothMethod = LAPLACE_EDGE,
-            const bool preserveQuality = false);
-    double SmoothVolume(size_t iters = 1, const SmoothMethod smoothMethod = LAPLACE_EDGE, const bool preserveQuality = false);
-    glm::vec3 GetFaceCenter(const Face& f);
-    glm::vec3 LapLace(const Vertex& v, const bool treatSharpFeatureAsRegular = false, const bool treatCornerAsRegular = false);
-    void ConvertSurfaceToTriangleMesh();
-
-    void Zoom(const glm::vec3& ref, const double scale = 1);
-    const float GetScaledJacobian(const Cell& c) const;
-    double GetMinScaledJacobian(double& avgSJ) const;
-
-    bool IsPointInside(const glm::vec3& orig, const glm::vec3 dir = glm::vec3(0, 0, 1)) const;
 
     std::vector<std::vector<int>> getLocalFaceRegions();
-    double getMinimumScaledJacobian(std::vector<int> faceIds);
-    double getSumOfMinimumScaledJacobian(std::vector<std::vector<int>> regions);
     double getIterativeEnergyOfRegion(std::vector<int> faceIds);
-    double getMinimumScaledJacobian(Face& f);
-    double getMinimumScaledJacobianAtV(Face& f, Vertex& v);
-    double getMinimumScaledJacobianOfRegion(Vertex& v, double length);
-    void expandFaceRegionByOneLayer(std::vector<int>& localFaceRegion);
-    std::vector<std::vector<int>> mergeRegions(std::vector<std::vector<int>> localFaceRegions);
-    std::vector<int> collapseFacesToVerticies(std::vector<int> fIds);
     void printQuality();
-    float getAverageArea();
-    float getAreaOfFace(Face& f);
-    void orderNeighboringVertices();
-    void orderVerticesInFaces();
-    Vertex getAverageOfVIds(std::vector<size_t> points);
-    void splitFace(int fId);
-    void expandFace(int fId);
-    void collapseEdge(int eId);
-    std::vector<int> selectBoundaryForIterativeOptimization();
-    std::vector<int> selectBoundaryAsTwoFacesFromCornerVertices();
-    std::vector<int> selectBoundaryAsNFacesFromCornerVertices(int n);
-    std::vector<int> selectBoundaryAsNeighboringFacesFromInversion();
-    std::vector<int> selectBoundrayAsNFacesFromInversion(int n);
-    int getDistanceFromCorner(std::vector<int> vIds, int currentDistance);
-    void classifyCornerVertices();
-    bool isFaceInverted(int fId);
-    void fixInvertedFaces();
-    void getiterativeCornerEnergy();
+    int getNumOfInvertedElements(std::vector<int> localFaceRegion);
 private:
+    void BuildAllConnectivities();
     void BuildE();
     void BuildF();
-    // -------------
-    void BuildV_V();
-    void BuildV_E();
-    void BuildV_F();
     void BuildV_C();
-    // -------------
     void BuildE_V();
     void BuildE_E();
     void BuildE_F();
-    void BuildE_C();
-    // -------------
-    void BuildF_V();
-    void BuildF_E();
     void BuildF_F();
-    void BuildF_C();
-    // -------------
-    void BuildC_V();
-    void BuildC_E();
-    void BuildC_F();
-    void BuildC_C();
-    void LabelFace(Face& face, size_t& label);
-    void LabelEdge(Edge& edge, size_t& label, const bool breakAtConrer = false);
-    double GetCosAngle(const Edge& edge, const Face& face1, const Face& face2);
+    void ExtractBoundary();
+    void orderNeighboringVertices();
+    void classifyCornerVertices();
+    void orderVerticesInFaces();
+
+    double getMinimumScaledJacobian(Face& f);
+    std::vector<std::vector<int>> mergeRegions(std::vector<std::vector<int>> localFaceRegions);
+    std::vector<int> collapseFacesToVerticies(std::vector<int> fIds);
+    void expandFaceRegionByOneLayer(std::vector<int>& localFaceRegion);
+    void removeUnsolvableFaces(std::vector<int>& localFaceRegion);
+    bool hasUnsolvableInversion(Face& f);
+    bool hasUnsolvableInversion(std::vector<int> fIds);
+
+    // maybe
+    float getAverageArea();
+    float getAreaOfFace(Face& f);
+
 public:
-    void GetQuality(const Vertex& v, double& minSJ, double& avgSJ);
+    double getMinimumScaledJacobian(std::vector<int> faceIds);
+    float getMaximumEdgeLength(Face& f);
+    float getMinimumEdgeLength(Vertex& v);
     size_t GetQuality(const char* filename, double& minValue, double& avgValue, const double minSJ = 0.0);
     size_t GetQualityVerdict(double& minValue, double& avgValue, const double minSJ = 0.0);
-    void OutputBadCells(const std::vector<size_t>& badCellIds, const char* filename);
 public:
     std::vector<Vertex> V;
     std::vector<Edge> E;
@@ -588,12 +512,4 @@ public:
     double cos_angle_threshold = 0.984807753;
 };
 
-void set_redundent_clearn(std::vector<size_t>& set);
-bool set_contain(std::vector<size_t>& large_set, size_t element);
-void set_exclusion(std::vector<size_t>& large_set, std::vector<size_t>& small_set, std::vector<size_t> &result_set);
-bool IsOverlap(const Face& f1, const Face& f2);
-bool Find(const std::vector<size_t>& Ids, const size_t targetId);
-size_t GetoppositeFaceId(const Mesh& mesh, const size_t cellId, const size_t faceId);
-bool IsEdgeInCell(const Mesh& mesh, const size_t cellId, const size_t edgeId);
-glm::vec3 GetCenter(const std::vector<Vertex>& V);
 #endif /* MESH_H_ */

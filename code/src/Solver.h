@@ -6,51 +6,32 @@
 
 class Solver {
 public:
-    Solver()
-    : mesh()
-    {}
-    Solver(const Solver& solver)
-    : mesh(solver.mesh)
-    {}
-    Solver(const Mesh& rMesh)
-    : mesh(rMesh)
-    {
-        int size = 2 * mesh.V.size();
-        standardHessianCoefficients.clear();
-        standardHessian = Eigen::SparseMatrix<double>(size, size);
-        standardVector = Eigen::VectorXd::Zero(size);
-    }
-    ~Solver()
-    {}
-    void getHessian();
-    void getHessianForEdgeTerms();
-    void getInitialTerm(std::vector<int> vIds);
-    void getInitialTermWithConstantWeight(std::vector<int> vIds, float weight);
-    void getInitialTermWithDepthWeight(std::vector<int> vIds);
-    void getInitialTermWithLength(std::vector<int> vIds);
-    void addInitialWeightForV(int vId, float weight);
-
-    void addAverageTermForVertex(int vId);
-    void addAverageTermForFace(int fId);
-    void optimize();
-    void iterativeOptimization();
-    void iterativeOptimizeCornerVertices();
-    void iterativeOptimizeMinSJ();
-    std::vector<double> estimateGradientForFV(size_t fId, size_t vId, float initialSJ);
-    std::vector<double> estimateMinSJGradient(size_t vId, std::vector<int> localFaceRegions);
-
-private:
-    void addCoefficientsForIndex(int index1, int index2, float value);
-    std::vector<Vertex> iterativeSmoothInnerVertices();
-    std::vector<Vertex> iterativeSmoothBoundaryVertices();
-    void updateVertices(std::vector<Vertex> newV);
+    Mesh mesh;
+    double DELTA;
 
 public:
-    Mesh mesh;
-    std::vector<Mesh> pastMeshes;
-    std::vector<Eigen::Triplet<double>> standardHessianCoefficients;
-    Eigen::SparseMatrix<double> standardHessian;
-    Eigen::VectorXd standardVector;
+    Solver() : mesh() {}
+    Solver(const Solver& solver) : mesh(solver.mesh) {}
+    Solver(const Mesh& rMesh) : mesh(rMesh) {}
+    ~Solver() {}
+
+    void runGlobalOptimization();
+    void runLocalOptimizations();
+
+private:
+    void getGlobalHessianAndVector(Eigen::SparseMatrix<double>& hessian, Eigen::VectorXd& vector);
+    void addCoefficientsForIndex(std::vector<Eigen::Triplet<double>>& hessianCoefficients, Eigen::VectorXd& vector, int index1, int index2, float value);
+    Eigen::VectorXd solveSystem(Eigen::SparseMatrix<double>& hessian, Eigen::VectorXd& vector);
+
+    void runLocalOptimization(std::vector<int> localFaceRegion, int& counter);
+    void setDelta(std::vector<std::vector<int>> localFaceRegions);
+    std::vector<double> getLocalGradient(std::vector<int> localFaceRegion);
+    double getLocalStepSize(std::vector<int> localFaceRegion, std::vector<double> gradient, double maxStepSize);
+    double getLocalStepSizeFromEdges(std::vector<int> localFaceRegion, std::vector<double> gradient);
+    std::vector<double> estimateLocalPartialDerivativesForV(size_t vId, std::vector<int> localFaceRegion);
+
+    void updateVertices(std::vector<Vertex> newV);
+    void updateVertices(Eigen::VectorXd newV);
 };
 
 #endif /* SOLVER_H_ */
