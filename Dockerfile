@@ -42,7 +42,6 @@ WORKDIR /projects/build
 RUN make -j4
 RUN make install
 
-
 COPY code /code/
 WORKDIR /code
 RUN sh build.sh

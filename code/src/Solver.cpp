@@ -7,8 +7,6 @@
 
 using namespace std;
 
-int getIndexOf(int num, vector<unsigned long int> vec);
-
 void Solver::runGlobalOptimization() {
     int n = 2 * mesh.V.size();
     Eigen::SparseMatrix<double> hessian = Eigen::SparseMatrix<double>(n, n);
@@ -20,7 +18,6 @@ void Solver::runGlobalOptimization() {
 }
 
 void Solver::getGlobalHessianAndVector(Eigen::SparseMatrix<double>& hessian, Eigen::VectorXd& vector) {
-    cout << "In getHessian()\n";
     std::vector<Eigen::Triplet<double>> hessianCoefficients;
 
     for (int i = 0; i < mesh.V.size(); i++) {
@@ -32,8 +29,8 @@ void Solver::getGlobalHessianAndVector(Eigen::SparseMatrix<double>& hessian, Eig
             for (int j = 0; j < f.Vids.size(); j++) {
                 Vertex u = mesh.V.at(f.Vids.at(j));
 
-                int vIndex = getIndexOf(v.id, f.Vids);
-                int uIndex = getIndexOf(u.id, f.Vids);
+                int vIndex = mesh.getLocalIndexOf(v.id, f.Vids);
+                int uIndex = mesh.getLocalIndexOf(u.id, f.Vids);
                 int difference = (uIndex - vIndex + 4) % 4;
                 float value = difference % 2 == 0 ? 1 : -1;
                 
@@ -71,8 +68,6 @@ void Solver::addCoefficientsForIndex(std::vector<Eigen::Triplet<double>>& hessia
 }
 
 Eigen::VectorXd Solver::solveSystem(Eigen::SparseMatrix<double>& A, Eigen::VectorXd& b) {
-    cout << "In solveSystem()\n";
-
     Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> systemSolver;
     systemSolver.analyzePattern(A);
     systemSolver.factorize(A);
@@ -80,18 +75,10 @@ Eigen::VectorXd Solver::solveSystem(Eigen::SparseMatrix<double>& A, Eigen::Vecto
     return systemSolver.solve(-b);
 }
 
-int getIndexOf(int num, vector<unsigned long int> vec) {
-    for (int i = 0; i < vec.size(); i++) {
-        if (vec.at(i) == num)
-            return i;
-    }
-    return -1;
-}
-
 void Solver::updateVertices(std::vector<Vertex> newV) {
     if (mesh.V.size() != newV.size()) {
-        std::cout << "ERROR\n";
-        std::exit(0);
+        std::cerr << "ERROR: mesh.V.size() != newV.size() in updateVertices()\n";
+        std::exit(1);
     }
     for (int i = 0; i < mesh.V.size(); i++) {
         mesh.V.at(i) = newV.at(i);
@@ -100,8 +87,8 @@ void Solver::updateVertices(std::vector<Vertex> newV) {
 
 void Solver::updateVertices(Eigen::VectorXd newV) {
     if (newV.size() != 2 * mesh.V.size()) {
-        std::cout << "ERROR\n";
-        std::exit(0);
+        std::cerr << "ERROR: newV.size() != 2 * mesh.V.size() in updateVertices()\n";
+        std::exit(1);
     }
     for (int i = 0; i < mesh.V.size(); i++) {
         Vertex& v = mesh.V.at(i);
@@ -113,18 +100,18 @@ void Solver::updateVertices(Eigen::VectorXd newV) {
 }
 
 void Solver::runLocalOptimizations() {
-    std::cout << "In runLocalOptimizations()\n";
     std::vector<std::vector<int>> localFaceRegions = mesh.getLocalFaceRegions();
     setDelta(localFaceRegions);
     int counter = 0;
-    std::cout << "Number of local face regions: " << localFaceRegions.size() << std::endl;
+    // std::cout << "Number of local face regions: " << localFaceRegions.size() << std::endl;
     for (int i = 0; i < localFaceRegions.size(); i++) {
-        std::vector<int> localFaceRegion = localFaceRegions.at(1);
-        std::cout << "Optimizing local face region " << i << " with " << mesh.getNumOfInvertedElements(localFaceRegion) << " inversions and fixed step size" << std::endl;
+        std::vector<int> localFaceRegion = localFaceRegions.at(i);
+        // std::cout << "Optimizing local face region " << i << " with " << mesh.getNumOfInvertedElements(localFaceRegion) << " inversions" << std::endl;
         runLocalOptimization(localFaceRegion, counter);
-        break;
+        // std::cout << "done in " << counter << " iterations" << std::endl;
     }
-    std::cout << "-------------------------\n";
+    // std::cout << "All done in " << counter << " iterations\n";
+    // std::cout << "-------------------------\n";
 }
 
 void Solver::setDelta(std::vector<std::vector<int>> localFaceRegions) {
@@ -133,7 +120,6 @@ void Solver::setDelta(std::vector<std::vector<int>> localFaceRegions) {
         std::vector<int> localFaceRegion = localFaceRegions.at(i);
 
         for (int j = 0; j < localFaceRegion.size(); j++) {
-            std::cout << localFaceRegion.at(j) << ", ";
             Face& f = mesh.F.at(localFaceRegion.at(j));
 
             for (int k = 0; k < f.Eids.size(); k++) {
@@ -145,7 +131,6 @@ void Solver::setDelta(std::vector<std::vector<int>> localFaceRegions) {
                 }
             }
         }
-        std::cout << std::endl;
     }
     DELTA = minimumEdgeLength / 10;
 }
@@ -155,33 +140,27 @@ void Solver::runLocalOptimization(std::vector<int> localFaceRegion, int& counter
     double maxStepSize;
     bool jumpedOnLast = false;
     double lastEnergy = 0.0;
+    std::vector<int> innerVertices = mesh.getInnerVerticesOfFaces(localFaceRegion);
+
     for (int i = 0; i < 100; i++) {
-        std::vector<double> gradient = getLocalGradient(localFaceRegion);
+        std::vector<double> gradient = getLocalGradient(localFaceRegion, innerVertices);
 
         double tempCurrentEnergy = mesh.getIterativeEnergyOfRegion(localFaceRegion);
-        // double oldStepSize = getLocalStepSize(localFaceRegion, gradient); //(returning 0 for no gradient)
-        // if (oldStepSize == 0) {
-        //     std::cout << "Iterative optimization done at iteration " << counter << std::endl;
-        //     break;
-        // }
-        // stepSize = 0.1;//0.0001;//0.1; //how to best determine step size. Should be fixed thorughout whole iteration
+
         if (i == 0) {
             stepSize = getLocalStepSizeFromEdges(localFaceRegion, gradient);
             maxStepSize = stepSize;
-            std::cout << "Selected step size would have been: " << getLocalStepSizeFromEdges(localFaceRegion, gradient) << std::endl;
         }
         stepSize = getLocalStepSize(localFaceRegion, gradient, maxStepSize);
         bool isReturnedStepSizeZero = stepSize == 0;
         if (stepSize == 0) {
             if (mesh.getMinimumScaledJacobian(localFaceRegion) <= 0) {
-                std::cout << "jump at iteration " << counter << std::endl;
+                // std::cout << "jump at iteration " << counter << std::endl;
                 stepSize = maxStepSize;
             } else {
-                std::cout << "Iterative optimization done at iteration " << counter << " because stepSize == 0 and no inversions" << std::endl;
+                // std::cout << "Iterative optimization done at iteration " << counter << " because stepSize == 0 and no inversions" << std::endl;
                 break;
             }
-            // std::cout << "New maxStepSize would be " << getLocalStepSizeFromEdges(localFaceRegion, gradient) << std::endl;
-            // maxStepSize = getLocalStepSizeFromEdges(localFaceRegion, gradient);
         }
 
         for (int j = 0; j < mesh.V.size(); j++) {
@@ -191,17 +170,18 @@ void Solver::runLocalOptimization(std::vector<int> localFaceRegion, int& counter
         }
 
         double tempNextEnergy = mesh.getIterativeEnergyOfRegion(localFaceRegion);
-        if (jumpedOnLast && tempNextEnergy <= lastEnergy) {
-            std::cout << "Iterative optimization done at iteration " << counter << " because jump start failed" << std::endl;
-            std::cout << tempNextEnergy << " " << lastEnergy << std::endl;
-            break;
-        }
-        jumpedOnLast = isReturnedStepSizeZero;
-        if (jumpedOnLast)
-            lastEnergy = tempNextEnergy;
-        std::string fileName = std::string("/examples/_iterativeMinSJ_") + std::to_string(counter++) + ".vtk";
+        // if (jumpedOnLast && tempNextEnergy <= lastEnergy) {
+        //     std::cout << "Iterative optimization done at iteration " << counter << " because jump start failed" << std::endl;
+        //     break;
+        // }
+        // jumpedOnLast = isReturnedStepSizeZero;// (stepSize == 0) && mesh.getMinimumScaledJacobian(localFaceRegion) <= 0;
+        // if (jumpedOnLast)
+        //     lastEnergy = tempNextEnergy;
+
+        std::string fileName = std::string("/examples/_iterativeMinSJ_") + std::to_string(counter) + ".vtk";
         MeshFileWriter fw(mesh, fileName.c_str());
-        fw.WriteFile();
+        // fw.WriteFile();
+        counter++;
     }
 }
 
@@ -221,7 +201,7 @@ double Solver::getLocalStepSizeFromEdges(std::vector<int> localFaceRegion, std::
         double targetLength = 0.2 * minEdgeLength;
         double s = std::sqrt( (targetLength * targetLength) / (std::pow(gradient.at(2 * v.id), 2) + std::pow(gradient.at(2 * v.id + 1), 2)) );
         if (s < stepSize) {
-            std::cout << "step size determined by vertex " << v.id << std::endl;
+            // std::cout << "step size determined by vertex " << v.id << std::endl;
             stepSize = s;
         }
     }
@@ -241,19 +221,29 @@ std::vector<double> Solver::getLocalGradient(std::vector<int> localFaceRegion) {
     return gradient;
 }
 
+std::vector<double> Solver::getLocalGradient(std::vector<int> localFaceRegion, std::vector<int> innerVertices) {
+    std::vector<double> gradient(2 * mesh.V.size());
+    for (int i = 0; i < innerVertices.size(); i++) {
+        Vertex& v = mesh.V.at(innerVertices.at(i));
+        if (!v.isBoundary) {
+            std::vector<double> estimatedPartialDerivatives = estimateLocalPartialDerivativesForV(v.id, localFaceRegion);
+            gradient.at(2 * v.id) += estimatedPartialDerivatives.at(0);
+            gradient.at(2 * v.id + 1) += estimatedPartialDerivatives.at(1);
+        }
+    }
+    return gradient;
+}
+
 double Solver::getLocalStepSize(std::vector<int> localFaceRegion, std::vector<double> gradient, double maxStepSize) {
     double t = 0;
     for (int i = 0; i < gradient.size(); i++) {
         t += std::pow(gradient.at(i), 2);
     }
     if (t <= 0) {
-        std::cout << "ERROR: t (should be +) is " << t << std::endl;
         return 0;
-        std::exit(0);
     }
     t *= -1;
-    double a = maxStepSize;//0.1;
-    // a *= 10;
+    double a = maxStepSize;
     double currentEnergy = mesh.getIterativeEnergyOfRegion(localFaceRegion);
     double nextEnergy;
     for (int j = 0; j < 10; j++) {
@@ -268,7 +258,6 @@ double Solver::getLocalStepSize(std::vector<int> localFaceRegion, std::vector<do
             v.x += a * gradient.at(2 * k);
             v.y += a * gradient.at(2 * k + 1);
         }
-        // std::cout << currentEnergy - nextEnergy << " " << a * t << std::endl;
         if (a == maxStepSize && currentEnergy <= nextEnergy)
             return a;
         if (currentEnergy - nextEnergy <= a * t)
@@ -277,8 +266,6 @@ double Solver::getLocalStepSize(std::vector<int> localFaceRegion, std::vector<do
     }
     if (std::abs(currentEnergy - nextEnergy) <= 0.001) {
         return 0;
-        // std::cout << "Iterative optimization done in " << "i" << " iterations\n";
-        // break;
     }
     return a;
 }

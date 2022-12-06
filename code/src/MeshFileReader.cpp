@@ -2,7 +2,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-using namespace std;
 #include <string.h>
 
 #include "MeshFileReader.h"
@@ -19,6 +18,8 @@ using namespace std;
 #include <vtkIntArray.h>
 #include <vtkDataSetAttributes.h>
 #include <vtkSmartPointer.h>
+
+using namespace std;
 
 unsigned int GetObjectNumberFromStream(ifstream& file, const char* strObjectKeyWord)
 {

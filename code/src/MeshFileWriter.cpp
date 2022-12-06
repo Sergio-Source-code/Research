@@ -4,7 +4,6 @@
 #include <iomanip>
 #include <memory>
 #include "stdio.h"
-using namespace std;
 
 #include <vtkGenericDataObjectReader.h>
 #include <vtkUnstructuredGridReader.h>
@@ -18,6 +17,8 @@ using namespace std;
 #include <vtkIntArray.h>
 #include <vtkDataSetAttributes.h>
 #include <vtkSmartPointer.h>
+
+using namespace std;
 
 MeshFileWriter::MeshFileWriter()
 {
